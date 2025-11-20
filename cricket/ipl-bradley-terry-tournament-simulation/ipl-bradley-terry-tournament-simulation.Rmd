@@ -1,0 +1,173 @@
+---
+title: "project 2"
+output: html_document
+---
+
+```{r}
+library(cricketdata) 
+library(dplyr) 
+library(tidyr) 
+library(purrr) 
+library(BradleyTerry2) 
+```
+
+```{r}
+bbb <- cricketdata::fetch_cricsheet("bbb", "male", "ipl") 
+
+# Build a clean match-level table for 2019 regular season  
+runs_by_innings <- bbb %>% 
+  filter(season == 2019) %>% 
+  filter(innings %in% c(1, 2)) %>% 
+  mutate(runs_total = runs_off_bat + extras) %>% #
+  group_by(match_id, season, innings, batting_team, bowling_team) %>% 
+  summarise(innings_runs = sum(runs_total, na.rm = TRUE), .groups = "drop") 
+
+# Identify which teams batted first and second in each match # Comment describing next transformation
+first_second <- runs_by_innings %>%
+  arrange(match_id, innings) %>% 
+  group_by(match_id, season) %>% 
+  summarise( 
+    first_batting  = batting_team[innings == 1][1], 
+    second_batting = batting_team[innings == 2][1], 
+    first_runs     = innings_runs[innings == 1][1], 
+    second_runs    = innings_runs[innings == 2][1], 
+    .groups = "drop" 
+  ) %>% 
+  filter(!is.na(first_batting), !is.na(second_batting), !is.na(first_runs), !is.na(second_runs)) %>%
+  mutate( 
+    winner = case_when( 
+      first_runs  > second_runs ~ first_batting, 
+      second_runs > first_runs  ~ second_batting,
+      TRUE ~ NA_character_ 
+    )
+  ) %>% 
+  filter(!is.na(winner)) 
+```
+
+```{r}
+m2019 <- first_second %>% 
+  transmute( 
+    match_id, season, 
+    team1 = first_batting, 
+    team2 = second_batting, 
+    winner = winner, 
+    firstbat_win  = as.integer(winner == team1), 
+    secondbat_win = as.integer(winner == team2) 
+  )
+```
+
+
+```{r}
+# Bradley–Terry with batting-first intercept 
+teams_2019 <- sort(unique(c(m2019$team1, m2019$team2)))
+
+results <- m2019 %>% 
+  group_by(team1 = factor(team1, levels = teams_2019), 
+           team2 = factor(team2, levels = teams_2019)) %>% 
+  summarise( 
+    first.win  = sum(firstbat_win),
+    second.win = sum(secondbat_win),
+    .groups = "drop" 
+  ) %>% 
+  mutate(first.atfirst = 1L, second.atfirst = 0L) 
+
+bt_df <- data.frame(first.win = results$first.win, 
+                    second.win = results$second.win)
+bt_df$first.team  <- data.frame(team = results$team1,  at.first = results$first.atfirst)
+bt_df$second.team <- data.frame(team = results$team2,  at.first = results$second.atfirst)
+
+ref_team <- teams_2019[1] 
+
+bt_fit <- BradleyTerry2::BTm( 
+  outcome = cbind(first.win, second.win),
+  player1 = first.team, player2 = second.team, 
+  formula = ~ team + at.first,  
+  refcat  = ref_team, 
+  id      = "team", 
+  data    = bt_df 
+)
+
+lambda_hat <- BradleyTerry2::BTabilities(bt_fit)[, "ability"] 
+gamma_hat  <- unname(coef(bt_fit)["at.first"]) 
+```
+
+```{r}
+ilogit <- function(x) 1/(1 + exp(-x)) 
+
+p_A_beats_B <- function(A, B, A_first = TRUE) { 
+  diff <- lambda_hat[A] - lambda_hat[B] 
+  adj  <- if (isTRUE(A_first)) gamma_hat else -gamma_hat 
+  ilogit(diff + adj) 
+}
+
+```
+
+```{r}
+# Build the actual 2019 regular-season schedule from data 
+
+sched2019 <- m2019 %>% 
+  transmute(match_id, TeamA = team1, TeamB = team2, A_first = TRUE) 
+
+# Simulate a season and the real IPL playoffs (Q1, Eliminator, Q2, Final) 
+# Points: 2 per win; tie-breaks random (simple). Playoffs: 1v2 -> Q1, 3v4 -> Eliminator
+# Q2: Q1 loser vs Eliminator winner, Final: Q1 winner vs Q2 winner. 
+# For playoffs, we randomize who bats first (neutral setting for simplicity). 
+
+set.seed(479) 
+
+sim_one_season <- function() { 
+  pts <- setNames(rep(0L, length(teams_2019)), teams_2019) 
+  for (i in seq_len(nrow(sched2019))) { 
+    A <- sched2019$TeamA[i]; B <- sched2019$TeamB[i]; A_first <- sched2019$A_first[i] 
+    if (!(A %in% names(lambda_hat) && B %in% names(lambda_hat))) next 
+    pA <- p_A_beats_B(A, B, A_first) 
+    if (rbinom(1, 1, pA) == 1) pts[A] <- pts[A] + 2L else pts[B] <- pts[B] + 2L 
+  }
+
+  ord <- order(pts, runif(length(pts)), decreasing = TRUE) 
+  seeds <- data.frame(Team = names(pts)[ord], Points = pts[ord], Seed = seq_along(ord)) 
+  top4 <- seeds[1:4, , drop = FALSE] 
+
+  # Playoffs (random batting-order in each playoff game) 
+  # Q1: 1 vs 2 
+  Q1_A <- top4$Team[1]; Q1_B <- top4$Team[2] 
+  Q1_p <- p_A_beats_B(Q1_A, Q1_B, A_first = (runif(1) < 0.5)) 
+  Q1_A_wins <- rbinom(1, 1, Q1_p) == 1 # Simulate Q1 outcome
+  Q1_winner <- if (Q1_A_wins) Q1_A else Q1_B # Identify Q1 winner
+  Q1_loser  <- if (Q1_A_wins) Q1_B else Q1_A # Identify Q1 loser
+
+  # Eliminator: 3 vs 4 
+  E_A <- top4$Team[3]; E_B <- top4$Team[4] 
+  E_p <- p_A_beats_B(E_A, E_B, A_first = (runif(1) < 0.5)) 
+  E_A_wins <- rbinom(1, 1, E_p) == 1 # Simulate Eliminator
+  E_winner <- if (E_A_wins) E_A else E_B # Identify Eliminator winner
+
+  # Q2: Q1_loser vs Eliminator winner
+  Q2_A <- Q1_loser; Q2_B <- E_winner # Set Q2 teams as Q1 loser vs Eliminator winner
+  Q2_p <- p_A_beats_B(Q2_A, Q2_B, A_first = (runif(1) < 0.5)) 
+  Q2_A_wins <- rbinom(1, 1, Q2_p) == 1 # Simulate Q2
+  Q2_winner <- if (Q2_A_wins) Q2_A else Q2_B # Identify Q2 winner
+
+  # Final: Q1_winner vs Q2_winner 
+  F_A <- Q1_winner; F_B <- Q2_winner # Set Final teams
+  F_p <- p_A_beats_B(F_A, F_B, A_first = (runif(1) < 0.5)) 
+  F_A_wins <- rbinom(1, 1, F_p) == 1 # Simulate Final
+  finalists <- sort(c(F_A, F_B)) # Store finalists in sorted order for easy comparison
+
+  list(top4 = top4, finalists = finalists) # Return top-4 table and finalist pair
+}
+```
+
+```{r}
+# Monte Carlo estimate: P(MI & CSK both in Final) 
+N <- 20000 # Number of simulation repetitions
+target <- c("Mumbai Indians", "Chennai Super Kings") 
+
+hits <- replicate(N, { 
+  out <- sim_one_season() 
+  all(target %in% out$finalists) # Check if both MI and CSK are finalists
+})
+
+est_prob <- mean(hits) # Compute estimated probability as the mean of indicator outcomes
+cat(sprintf("Estimated P(MI & CSK both reach the Final) ≈ %.4f (N=%d)\n", est_prob, N)) 
+```
