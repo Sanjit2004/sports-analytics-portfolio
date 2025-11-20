@@ -7,6 +7,7 @@ All projects include real datasets, reproducible code, and professional reports.
 
 ### 1. IPL Tournament Simulation with Bradley–Terry Modeling  
 **Folder:** `cricket/ipl-bradley-terry-tournament-simulation/`
+**Live HTML Report:** https://sanjit2004.github.io/sports-analytics-portfolio/ipl-bradley-terry-tournament-simulation.html
 This project fits a Bradley–Terry paired comparison model to the **2019 IPL season** and simulates **20,000 seasons** to estimate finalist probabilities.  
 The analysis quantifies tournament volatility and models the probability of MI and CSK reaching the final together.
 
@@ -41,8 +42,8 @@ Includes:
 
 ## Tech Stack
 
-**Languages:** Python, R, SQL  
-**Python:** pandas, numpy, scikit-learn, matplotlib  
+**Languages:** Python, R 
+**Python:** pandas, numpy  
 **R:** tidyverse, ggplot2, BradleyTerry2, rmarkdown  
 **Tools:** RStudio, Git, GitHub
 
