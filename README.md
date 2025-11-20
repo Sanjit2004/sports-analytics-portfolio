@@ -6,7 +6,7 @@ All projects include real datasets, reproducible code, and professional reports.
 ##  Featured Projects
 
 ### 1. IPL Tournament Simulation with Bradley–Terry Modeling  
-**Folder:** `cricket/ipl-bradley-terry-tournament-simulation/`  
+**Folder:** `cricket/ipl-bradley-terry-tournament-simulation/`
 This project fits a Bradley–Terry paired comparison model to the **2019 IPL season** and simulates **20,000 seasons** to estimate finalist probabilities.  
 The analysis quantifies tournament volatility and models the probability of MI and CSK reaching the final together.
 
@@ -19,7 +19,8 @@ Includes:
 
 
 ### 2. IPL Win Probability Model (Ball-by-Ball)  
-**Folder:** `cricket/ipl-win-probability-model/`  
+**Folder:** `cricket/ipl-win-probability-model/` 
+**Live HTML Report:** https://Sanjit2004.github.io/sports-analytics-portfolio/ipl-win-probability.html  
 A ball-by-ball win probability model that evaluates how match momentum shifts during an IPL game using logistic/state-based modeling.
 
 Includes:  
