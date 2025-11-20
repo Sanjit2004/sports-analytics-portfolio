@@ -1,0 +1,1202 @@
+---
+title: "IPL Win Probability Modeling"
+output: html_notebook
+editor_options:
+  chunk_output_type: inline
+---
+
+This notebook builds ball-by-ball win probability models for IPL run chases using data from the `cricketdata` package. It constructs features such as runs required, balls remaining, and run rates, and compares logistic regression, random forest, and XGBoost models on out-of-sample data.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+# Load required libraries
+library(tidyverse)
+library(cricketdata)
+library(writexl)
+
+
+install.packages("ranger")
+```
+
+```{r data-load-and-clean}
+# Load IPL ball-by-ball data
+ipl_bbb <- fetch_cricsheet("bbb", "male", "ipl")
+
+# Check column types
+df_info <- data.frame(
+  column = names(ipl_bbb),
+  type   = sapply(ipl_bbb, class)
+)
+cat("=== COLUMN TYPES ===\n")
+print(df_info)
+
+# Check unique seasons
+cat("\n=== UNIQUE SEASONS ===\n")
+cat("Seasons:", paste(sort(unique(ipl_bbb$season)), collapse = ", "), "\n\n")
+
+# Clean data: select relevant columns, handle NAs, filter invalid rows
+clean_ipl <- ipl_bbb %>%
+  select(
+    match_id, season, innings, over, ball,
+    batting_team, bowling_team,
+    striker, bowler,
+    runs_off_bat, extras,
+    balls_remaining, runs_scored_yet,
+    wicket, wickets_lost_yet, target,
+    wicket_type, player_dismissed
+  ) %>%
+  mutate(extras = ifelse(is.na(extras), 0, extras)) %>%
+  filter(balls_remaining > 0, wickets_lost_yet < 10) %>%
+  mutate(total_runs = runs_off_bat + extras)
+
+# Verification
+cat("=== DATA CLEANING VERIFICATION ===\n")
+cat("Original rows:", nrow(ipl_bbb), "\n")
+cat("Cleaned rows:", nrow(clean_ipl), "\n")
+cat(
+  "Rows removed (balls_remaining <= 0):",
+  nrow(ipl_bbb %>% filter(balls_remaining <= 0)), "\n"
+)
+cat(
+  "Rows removed (wickets_lost_yet >= 10):",
+  nrow(ipl_bbb %>% filter(wickets_lost_yet >= 10)), "\n"
+)
+cat(
+  "Total unique rows removed:",
+  nrow(ipl_bbb %>% filter(balls_remaining <= 0 | wickets_lost_yet >= 10)),
+  "\n\n"
+)
+
+# Additional checks for discrepancies
+cat("=== DATA DISCREPANCY CHECKS ===\n")
+cat("NA values in clean_ipl:\n")
+print(colSums(is.na(clean_ipl)))
+cat(
+  "\nInvalid match_id (NA or negative):",
+  sum(is.na(clean_ipl$match_id) | clean_ipl$match_id <= 0), "\n"
+)
+cat(
+  "Invalid target (NA or <= 0):",
+  sum(is.na(clean_ipl$target) | clean_ipl$target <= 0), "\n"
+)
+cat(
+  "Invalid runs_scored_yet (negative):",
+  sum(clean_ipl$runs_scored_yet < 0, na.rm = TRUE), "\n\n"
+)
+
+# Save cleaned data for reference
+write_xlsx(clean_ipl, "clean_ipl_data.xlsx")
+
+```
+
+```r
+```{r second-innings-and-outcomes}
+# Filter to 2nd innings (chases)
+second_innings <- clean_ipl %>%
+  filter(innings == 2)
+
+cat("=== STEP 1: 2ND INNINGS FILTERED ===\n")
+cat("Total balls in 2nd innings:", nrow(second_innings), "\n")
+cat("Unique matches:", n_distinct(second_innings$match_id), "\n\n")
+
+# Create match-level outcomes
+match_outcomes <- second_innings %>%
+  group_by(match_id) %>%
+  summarise(
+    final_score = max(runs_scored_yet),
+    target      = first(target),
+    .groups     = "drop"
+  ) %>%
+  mutate(match_won = ifelse(final_score >= target, 1, 0))
+
+# Verify match outcomes
+cat("=== MATCH OUTCOMES ===\n")
+cat("Total matches:", nrow(match_outcomes), "\n")
+cat(
+  "Match win rate (chasing teams):",
+  round(mean(match_outcomes$match_won) * 100, 1), "%\n\n"
+)
+print(table(match_outcomes$match_won))
+
+# Join outcomes to ball-by-ball data
+second_innings <- second_innings %>%
+  left_join(match_outcomes %>% select(match_id, match_won),
+            by = "match_id") %>%
+  rename(won = match_won)
+
+# Verify join
+cat("=== JOIN VERIFICATION ===\n")
+cat("Balls from winning matches:",
+    sum(second_innings$won == 1, na.rm = TRUE), "\n")
+cat("Balls from losing matches:",
+    sum(second_innings$won == 0, na.rm = TRUE), "\n")
+cat(
+  "Proportion from wins:",
+  round(mean(second_innings$won, na.rm = TRUE) * 100, 1), "%\n"
+)
+cat("NA in won:", sum(is.na(second_innings$won)), "\n\n")
+
+# Check sample match
+cat("=== SAMPLE MATCH ===\n")
+sample_match <- second_innings %>%
+  filter(match_id == first(match_id)) %>%
+  select(match_id, over, ball, runs_scored_yet, target, won)
+cat("First 5 balls:\n")
+print(head(sample_match, 5))
+cat("\nLast 5 balls:\n")
+print(tail(sample_match, 5))
+```
+
+
+```{r feature-engineering}
+# Feature engineering for modeling
+second_innings <- second_innings %>%
+  mutate(
+    runs_required = target - runs_scored_yet,
+    wickets_in_hand = 10 - wickets_lost_yet,
+    balls_faced = 120 - balls_remaining,
+    current_run_rate = ifelse(
+      balls_faced > 0,
+      (runs_scored_yet * 6) / balls_faced,
+      0
+    ),
+    required_run_rate = ifelse(
+      balls_remaining > 0,
+      (runs_required * 6) / balls_remaining,
+      NA_real_
+    ),
+    run_rate_diff = ifelse(
+      is.na(required_run_rate),
+      0,
+      required_run_rate - current_run_rate
+    ),
+    powerplay   = ifelse(over <= 6, 1, 0),
+    death_overs = ifelse(over >= 17, 1, 0)
+  )
+
+# Checks for data issues
+cat("=== STEP 2: FEATURES CREATED ===\n")
+cat(
+  "Infinite required_run_rate:",
+  sum(is.infinite(second_innings$required_run_rate), na.rm = TRUE), "\n"
+)
+cat("NA required_run_rate:",
+    sum(is.na(second_innings$required_run_rate)), "\n")
+cat("Infinite run_rate_diff:",
+    sum(is.infinite(second_innings$run_rate_diff), na.rm = TRUE), "\n")
+cat("Negative runs_required:",
+    sum(second_innings$runs_required < 0, na.rm = TRUE), "\n")
+cat("Extreme current_run_rate (>20):",
+    sum(second_innings$current_run_rate > 20, na.rm = TRUE), "\n")
+cat("Extreme required_run_rate (>20):",
+    sum(second_innings$required_run_rate > 20, na.rm = TRUE), "\n\n")
+
+cat("=== FULL FEATURE SUMMARY ===\n")
+summary(second_innings %>%
+          select(
+            runs_required, wickets_in_hand, balls_remaining,
+            current_run_rate, required_run_rate,
+            powerplay, death_overs, run_rate_diff
+          ))
+
+cat("\n=== SAMPLE FEATURES ===\n")
+sample_rows <- second_innings %>%
+  filter(match_id == first(match_id)) %>%
+  filter(over %in% c(1, 10, 19)) %>%
+  select(
+    over, ball, runs_required, wickets_in_hand, balls_remaining,
+    current_run_rate, required_run_rate, powerplay, death_overs
+  )
+print(sample_rows)
+
+```
+
+```{r train-test-split}
+# Normalise seasons and engineer features consistently
+cat("=== AVAILABLE SEASONS ===\n")
+cat("Raw seasons:", paste(sort(unique(second_innings$season)), collapse = ", "), "\n\n")
+
+second_innings_clean <- second_innings %>%
+  mutate(
+    season_year = case_when(
+      season == "2007/08" ~ "2008",
+      season == "2009/10" ~ "2010",
+      season == "2020/21" ~ "2021",
+      TRUE ~ season
+    ),
+    runs_required     = target - runs_scored_yet,
+    wickets_in_hand   = 10 - wickets_lost_yet,
+    balls_faced       = 120 - balls_remaining,
+    current_run_rate  = ifelse(
+      balls_faced > 0,
+      (runs_scored_yet * 6) / balls_faced,
+      0
+    ),
+    required_run_rate = ifelse(
+      balls_remaining > 0,
+      (runs_required * 6) / balls_remaining,
+      NA_real_
+    ),
+    run_rate_diff     = required_run_rate - current_run_rate,
+    powerplay         = as.integer(over <= 6),
+    death_overs       = as.integer(over >= 17)
+  )
+
+cat("=== SEASON NORMALIZATION ===\n")
+cat("Normalized seasons:",
+    paste(sort(unique(second_innings_clean$season_year)), collapse = ", "),
+    "\n\n")
+
+# Filter out edge cases
+second_innings_clean <- second_innings_clean %>%
+  filter(
+    runs_required > 0,
+    wickets_in_hand > 0,
+    is.finite(required_run_rate)
+  )
+
+cat("=== EDGE CASES REMOVED ===\n")
+cat("Before filtering:", nrow(second_innings), "balls\n")
+cat("After filtering:", nrow(second_innings_clean), "balls\n")
+cat("Removed:", nrow(second_innings) - nrow(second_innings_clean), "balls\n\n")
+
+# Check for DLS matches
+cat("=== CHECKING FOR DLS ===\n")
+dls_check <- second_innings_clean %>%
+  group_by(match_id) %>%
+  summarise(unique_targets = n_distinct(target), .groups = "drop") %>%
+  filter(unique_targets > 1)
+cat("Matches with changing targets (DLS):", nrow(dls_check), "\n")
+cat("These are retained in the dataset.\n\n")
+
+# Check for unusual targets
+cat("=== CHECKING FOR UNUSUAL TARGETS ===\n")
+unusual_targets <- second_innings_clean %>%
+  group_by(match_id) %>%
+  summarise(target = first(target), .groups = "drop") %>%
+  filter(target < 100 | target > 250)
+cat("Matches with unusual targets (<100 or >250):", nrow(unusual_targets), "\n\n")
+
+# Train/test split: 2008–2024 vs 2025
+train_data <- second_innings_clean %>%
+  filter(season_year != "2025") %>%
+  arrange(match_id, over, ball)
+
+test_data <- second_innings_clean %>%
+  filter(season_year == "2025") %>%
+  arrange(match_id, over, ball)
+
+cat("=== TRAIN/TEST SPLIT ===\n")
+cat("\nTRAINING SET (2008–2024):\n")
+cat("  Total balls:", nrow(train_data), "\n")
+cat("  Unique matches:", n_distinct(train_data$match_id), "\n")
+cat("  Seasons:", paste(sort(unique(train_data$season_year)), collapse = ", "), "\n")
+cat("  Number of seasons:", length(unique(train_data$season_year)), "\n")
+cat("  Win rate:", round(mean(train_data$won, na.rm = TRUE) * 100, 1), "%\n")
+
+cat("\nTEST SET (2025):\n")
+cat("  Total balls:", nrow(test_data), "\n")
+cat("  Unique matches:", n_distinct(test_data$match_id), "\n")
+cat("  Win rate:", round(mean(test_data$won, na.rm = TRUE) * 100, 1), "%\n\n")
+
+cat("=== VERIFICATION ===\n")
+cat("Total accounted for:", nrow(train_data) + nrow(test_data), "\n")
+cat("Should equal cleaned:", nrow(second_innings_clean), "\n")
+cat("Difference:",
+    abs(nrow(second_innings_clean) - (nrow(train_data) + nrow(test_data))),
+    "\n\n")
+
+cat("=== TRAINING SET FEATURE SUMMARY ===\n")
+summary(train_data %>%
+          select(
+            runs_required, wickets_in_hand, balls_remaining,
+            current_run_rate, required_run_rate,
+            powerplay, death_overs, run_rate_diff, won
+          ))
+
+# Save datasets
+write.csv(train_data, "ipl_train_2008_2024.csv", row.names = FALSE)
+write.csv(test_data,  "ipl_test_2025.csv",      row.names = FALSE)
+
+cat("Phase 1 complete. Files saved: ipl_train_2008_2024.csv, ipl_test_2025.csv\n")
+cat("Ready for Phase 2: model building.\n")
+```
+
+```{r logistic-regression}
+# PHASE 2 - STEP 1: Logistic Regression Model
+
+cat("=== PHASE 2 - STEP 1: LOGISTIC REGRESSION ===\n")
+cat("Removing run_rate_diff to address multicollinearity.\n\n")
+
+feature_cols <- c(
+  "runs_required", "balls_remaining", "wickets_in_hand",
+  "current_run_rate", "required_run_rate",
+  "powerplay", "death_overs"
+)
+
+cat("=== DATA QUALITY CHECK ===\n")
+cat("Features used:", paste(feature_cols, collapse = ", "), "\n")
+cat("Total training rows:", nrow(train_data), "\n")
+cat("Total test rows:", nrow(test_data), "\n\n")
+
+train_clean <- train_data[complete.cases(train_data[, c(feature_cols, "won")]), ]
+test_clean  <- test_data[complete.cases(test_data[, c(feature_cols, "won")]), ]
+
+cat("After removing rows with missing values:\n")
+cat("  Training data:", nrow(train_clean), "balls\n")
+cat("  Test data:", nrow(test_clean), "balls\n\n")
+
+cat("=== TRAINING LOGISTIC REGRESSION MODEL ===\n")
+cat("Model specification:\n")
+cat("logit(P(win)) = β0 + β1*runs_required + β2*balls_remaining +\n")
+cat("                β3*wickets_in_hand + β4*current_run_rate +\n")
+cat("                β5*required_run_rate + β6*powerplay + β7*death_overs\n\n")
+
+logistic_model <- glm(
+  won ~ runs_required + balls_remaining + wickets_in_hand +
+    current_run_rate + required_run_rate +
+    powerplay + death_overs,
+  data   = train_clean,
+  family = binomial(link = "logit")
+)
+
+cat("Model trained.\n\n")
+
+cat("=== MODEL SUMMARY ===\n")
+summary(logistic_model)
+
+cat("\n=== COEFFICIENT TABLE ===\n")
+coef_table <- data.frame(
+  Feature     = names(coef(logistic_model)),
+  Coefficient = round(coef(logistic_model), 6),
+  Odds_Ratio  = round(exp(coef(logistic_model)), 4),
+  row.names   = NULL
+)
+print(coef_table)
+
+cat("\nExpected sign checks (qualitative):\n")
+cat("  runs_required: negative (more runs needed implies lower win probability)\n")
+cat("  wickets_in_hand: positive (more wickets implies higher win probability)\n")
+cat("  required_run_rate: negative (higher required rate implies lower win probability)\n")
+cat("  current_run_rate: positive (scoring faster implies higher win probability)\n")
+cat("  powerplay, death_overs: context-dependent.\n\n")
+
+cat("=== GENERATING PREDICTIONS ===\n")
+train_pred_logistic <- predict(logistic_model, train_clean, type = "response")
+test_pred_logistic  <- predict(logistic_model, test_clean,  type = "response")
+
+cat("Training predictions:", length(train_pred_logistic), "\n")
+cat("Test predictions:",    length(test_pred_logistic),  "\n\n")
+
+cat("=== SANITY CHECKS ===\n")
+cat("\nTRAINING SET:\n")
+cat("  Min prediction:",   round(min(train_pred_logistic), 4), "\n")
+cat("  Max prediction:",   round(max(train_pred_logistic), 4), "\n")
+cat("  Mean prediction:",  round(mean(train_pred_logistic), 4), "\n")
+cat("  All predictions in [0,1]:",
+    all(train_pred_logistic >= 0 & train_pred_logistic <= 1), "\n")
+
+cat("\nTEST SET:\n")
+cat("  Min prediction:",   round(min(test_pred_logistic), 4), "\n")
+cat("  Max prediction:",   round(max(test_pred_logistic), 4), "\n")
+cat("  Mean prediction:",  round(mean(test_pred_logistic), 4), "\n")
+cat("  All predictions in [0,1]:",
+    all(test_pred_logistic >= 0 & test_pred_logistic <= 1), "\n\n")
+
+cat("=== CALIBRATION CHECK ===\n")
+cat("Training:\n")
+cat("  Actual win rate:", round(mean(train_clean$won), 4), "\n")
+cat("  Mean prediction:", round(mean(train_pred_logistic), 4), "\n")
+cat("  Absolute difference:",
+    round(abs(mean(train_clean$won) - mean(train_pred_logistic)), 4), "\n\n")
+
+cat("Test:\n")
+cat("  Actual win rate:", round(mean(test_clean$won), 4), "\n")
+cat("  Mean prediction:", round(mean(test_pred_logistic), 4), "\n")
+cat("  Absolute difference:",
+    round(abs(mean(test_clean$won) - mean(test_pred_logistic)), 4), "\n\n")
+
+train_clean$pred_logistic <- train_pred_logistic
+test_clean$pred_logistic  <- test_pred_logistic
+
+cat("Logistic regression step complete.\n\n")
+```
+
+```{r random-forest}
+# PHASE 2 - STEP 2: Random Forest Model
+
+cat("=== PHASE 2 - STEP 2: RANDOM FOREST ===\n")
+
+if (!requireNamespace("randomForest", quietly = TRUE)) {
+  install.packages("randomForest")
+}
+library(randomForest)
+
+cat("Preparing data for random forest.\n\n")
+
+feature_cols <- c(
+  "runs_required", "balls_remaining", "wickets_in_hand",
+  "current_run_rate", "required_run_rate",
+  "powerplay", "death_overs"
+)
+
+train_rf <- train_clean[, c(feature_cols, "won")]
+train_rf$won <- factor(train_rf$won, levels = c(0, 1))
+
+test_rf <- test_clean[, c(feature_cols, "won")]
+test_rf$won <- factor(test_rf$won, levels = c(0, 1))
+
+cat("Training set size:", nrow(train_rf), "\n")
+cat("Test set size:",     nrow(test_rf),   "\n")
+cat("Outcome levels:",    paste(levels(train_rf$won), collapse = ", "), "\n\n")
+
+cat("Training random forest model.\n")
+cat("Configuration:\n")
+cat("  Trees: 500\n")
+cat("  Features per split: approximately sqrt(7)\n\n")
+
+set.seed(479)
+
+start_time <- Sys.time()
+
+rf_model <- randomForest(
+  x            = train_rf[, feature_cols],
+  y            = train_rf$won,
+  ntree        = 500,
+  importance   = TRUE,
+  keep.forest  = TRUE
+)
+
+end_time <- Sys.time()
+cat("Training complete.\n")
+cat("Time taken:",
+    round(difftime(end_time, start_time, units = "secs"), 1), "seconds\n\n")
+
+cat("=== RANDOM FOREST SUMMARY ===\n")
+print(rf_model)
+cat("\n")
+
+cat("Out-of-bag (OOB) error rate:",
+    round(rf_model$err.rate[500, "OOB"] * 100, 2), "%\n\n")
+
+cat("=== VARIABLE IMPORTANCE (MEAN DECREASE GINI) ===\n")
+importance_df <- data.frame(
+  Feature          = rownames(importance(rf_model)),
+  MeanDecreaseGini = round(importance(rf_model)[, "MeanDecreaseGini"], 2)
+)
+importance_df <- importance_df[order(-importance_df$MeanDecreaseGini), ]
+rownames(importance_df) <- NULL
+print(importance_df)
+cat("\n")
+
+cat("=== GENERATING RANDOM FOREST PREDICTIONS ===\n")
+train_pred_rf <- predict(
+  rf_model,
+  newdata = train_rf[, feature_cols],
+  type    = "prob"
+)[, "1"]
+
+test_pred_rf <- predict(
+  rf_model,
+  newdata = test_rf[, feature_cols],
+  type    = "prob"
+)[, "1"]
+
+cat("Training predictions:", length(train_pred_rf), "\n")
+cat("Test predictions:",     length(test_pred_rf),  "\n\n")
+
+cat("=== SANITY CHECKS ===\n")
+cat("\nTRAINING SET:\n")
+cat("  Min prediction:",   round(min(train_pred_rf), 4), "\n")
+cat("  Max prediction:",   round(max(train_pred_rf), 4), "\n")
+cat("  Mean prediction:",  round(mean(train_pred_rf), 4), "\n")
+cat("  All predictions in [0,1]:",
+    all(train_pred_rf >= 0 & train_pred_rf <= 1), "\n")
+
+cat("\nTEST SET:\n")
+cat("  Min prediction:",   round(min(test_pred_rf), 4), "\n")
+cat("  Max prediction:",   round(max(test_pred_rf), 4), "\n")
+cat("  Mean prediction:",  round(mean(test_pred_rf), 4), "\n")
+cat("  All predictions in [0,1]:",
+    all(test_pred_rf >= 0 & test_pred_rf <= 1), "\n\n")
+
+cat("=== CALIBRATION CHECK ===\n")
+cat("Training:\n")
+cat(
+  "  Actual win rate:",
+  round(mean(as.numeric(as.character(train_rf$won))), 4), "\n"
+)
+cat("  Mean prediction:", round(mean(train_pred_rf), 4), "\n")
+cat("  Absolute difference:",
+    round(abs(mean(as.numeric(as.character(train_rf$won))) -
+              mean(train_pred_rf)), 4), "\n\n")
+
+cat("Test:\n")
+cat(
+  "  Actual win rate:",
+  round(mean(as.numeric(as.character(test_rf$won))), 4), "\n"
+)
+cat("  Mean prediction:", round(mean(test_pred_rf), 4), "\n")
+cat("  Absolute difference:",
+    round(abs(mean(as.numeric(as.character(test_rf$won))) -
+              mean(test_pred_rf)), 4), "\n\n")
+
+train_clean$pred_rf <- train_pred_rf
+test_clean$pred_rf  <- test_pred_rf
+
+cat("=== LOGISTIC VS RANDOM FOREST COMPARISON ===\n\n")
+cat("TRAINING SET:\n")
+cat("  Logistic mean prediction:",
+    round(mean(train_pred_logistic), 4), "\n")
+cat("  Random Forest mean prediction:",
+    round(mean(train_pred_rf), 4), "\n")
+cat("  Absolute difference:",
+    round(abs(mean(train_pred_logistic) - mean(train_pred_rf)), 4), "\n\n")
+
+cat("TEST SET:\n")
+cat("  Logistic mean prediction:",
+    round(mean(test_pred_logistic), 4), "\n")
+cat("  Random Forest mean prediction:",
+    round(mean(test_pred_rf), 4), "\n")
+cat("  Absolute difference:",
+    round(abs(mean(test_pred_logistic) - mean(test_pred_rf)), 4), "\n\n")
+
+cat("Prediction correlation (training):",
+    round(cor(train_pred_logistic, train_pred_rf), 4), "\n")
+cat("Prediction correlation (test):",
+    round(cor(test_pred_logistic, test_pred_rf), 4), "\n\n")
+
+varImpPlot(rf_model, main = "Variable Importance in Random Forest")
+```
+
+```{r xgboost-model}
+# PHASE 2 - STEP 3: XGBoost with Monotonic Constraints
+
+cat("=== PHASE 2 - STEP 3: XGBOOST WITH MONOTONIC CONSTRAINTS ===\n")
+
+if (!requireNamespace("xgboost", quietly = TRUE)) {
+  install.packages("xgboost")
+}
+library(xgboost)
+
+cat("Preparing data for XGBoost.\n\n")
+
+feature_cols <- c(
+  "runs_required", "balls_remaining", "wickets_in_hand",
+  "current_run_rate", "required_run_rate",
+  "powerplay", "death_overs"
+)
+
+train_matrix <- as.matrix(train_clean[, feature_cols])
+train_label  <- as.numeric(train_clean$won)
+
+test_matrix  <- as.matrix(test_clean[, feature_cols])
+test_label   <- as.numeric(test_clean$won)
+
+cat("Training matrix:", nrow(train_matrix), "x", ncol(train_matrix), "\n")
+cat("Test matrix:",     nrow(test_matrix),  "x", ncol(test_matrix),  "\n\n")
+
+dtrain <- xgb.DMatrix(data = train_matrix, label = train_label)
+dtest  <- xgb.DMatrix(data = test_matrix,  label = test_label)
+
+cat("DMatrix objects created.\n\n")
+
+cat("=== MONOTONIC CONSTRAINTS (CRICKET LOGIC) ===\n\n")
+
+monotone_constraints <- c(
+  -1,  # runs_required
+   0,  # balls_remaining
+  +1,  # wickets_in_hand
+  +1,  # current_run_rate
+  -1,  # required_run_rate
+  +1,  # powerplay
+  +1   # death_overs
+)
+
+constraint_df <- data.frame(
+  Feature       = feature_cols,
+  Constraint    = monotone_constraints,
+  Interpretation = c(
+    "More runs required -> lower win probability",
+    "No constraint",
+    "More wickets in hand -> higher win probability",
+    "Higher current run rate -> higher win probability",
+    "Higher required run rate -> lower win probability",
+    "Powerplay overs -> often higher scoring",
+    "Death overs -> often batting advantage"
+  )
+)
+
+print(constraint_df)
+cat("\n")
+
+cat("=== HYPERPARAMETER TUNING VIA CROSS-VALIDATION ===\n")
+
+params <- list(
+  objective            = "binary:logistic",
+  eval_metric          = "logloss",
+  eta                  = 0.1,
+  max_depth            = 6,
+  min_child_weight     = 1,
+  subsample            = 0.8,
+  colsample_bytree     = 0.8,
+  monotone_constraints = monotone_constraints
+)
+
+cat("Parameters:\n")
+cat("  Objective: binary:logistic\n")
+cat("  Learning rate (eta):", params$eta, "\n")
+cat("  Max depth:",            params$max_depth, "\n")
+cat("  Subsample:",            params$subsample, "\n")
+cat("  Monotonic constraints enabled.\n\n")
+
+set.seed(479)
+
+cv_results <- xgb.cv(
+  params                = params,
+  data                  = dtrain,
+  nrounds               = 500,
+  nfold                 = 5,
+  early_stopping_rounds = 50,
+  verbose               = 0,
+  print_every_n         = 50
+)
+
+optimal_rounds <- cv_results$best_iteration
+cat("Optimal rounds:", optimal_rounds, "\n")
+cat("Best CV log-loss:",
+    round(cv_results$evaluation_log$test_logloss_mean[optimal_rounds], 4),
+    "\n\n")
+
+cat("=== TRAINING FINAL XGBOOST MODEL ===\n")
+
+start_time <- Sys.time()
+
+xgb_model <- xgb.train(
+  params   = params,
+  data     = dtrain,
+  nrounds  = optimal_rounds,
+  watchlist = list(train = dtrain, test = dtest),
+  verbose  = 0,
+  print_every_n = 50
+)
+
+end_time <- Sys.time()
+cat("Training complete.\n")
+cat("Time taken:",
+    round(difftime(end_time, start_time, units = "secs"), 1), "seconds\n\n")
+
+cat("=== FEATURE IMPORTANCE (GAIN) ===\n")
+importance_matrix <- xgb.importance(model = xgb_model)
+print(importance_matrix)
+cat("\n")
+
+cat("=== GENERATING XGBOOST PREDICTIONS ===\n")
+
+train_pred_xgb <- predict(xgb_model, dtrain)
+test_pred_xgb  <- predict(xgb_model, dtest)
+
+cat("Training predictions:", length(train_pred_xgb), "\n")
+cat("Test predictions:",     length(test_pred_xgb),  "\n\n")
+
+cat("=== SANITY CHECKS ===\n")
+cat("\nTRAINING SET:\n")
+cat("  Min prediction:",   round(min(train_pred_xgb), 4), "\n")
+cat("  Max prediction:",   round(max(train_pred_xgb), 4), "\n")
+cat("  Mean prediction:",  round(mean(train_pred_xgb), 4), "\n")
+cat("  All predictions in [0,1]:",
+    all(train_pred_xgb >= 0 & train_pred_xgb <= 1), "\n")
+
+cat("\nTEST SET:\n")
+cat("  Min prediction:",   round(min(test_pred_xgb), 4), "\n")
+cat("  Max prediction:",   round(max(test_pred_xgb), 4), "\n")
+cat("  Mean prediction:",  round(mean(test_pred_xgb), 4), "\n")
+cat("  All predictions in [0,1]:",
+    all(test_pred_xgb >= 0 & test_pred_xgb <= 1), "\n\n")
+
+cat("=== CALIBRATION CHECK ===\n")
+cat("Training:\n")
+cat("  Actual win rate:",  round(mean(train_label), 4), "\n")
+cat("  Mean prediction:",  round(mean(train_pred_xgb), 4), "\n")
+cat("  Absolute difference:",
+    round(abs(mean(train_label) - mean(train_pred_xgb)), 4), "\n\n")
+
+cat("Test:\n")
+cat("  Actual win rate:",  round(mean(test_label), 4), "\n")
+cat("  Mean prediction:",  round(mean(test_pred_xgb), 4), "\n")
+cat("  Absolute difference:",
+    round(abs(mean(test_label) - mean(test_pred_xgb)), 4), "\n\n")
+
+train_clean$pred_xgb <- train_pred_xgb
+test_clean$pred_xgb  <- test_pred_xgb
+
+cat("=== THREE-MODEL COMPARISON (SUMMARY STATISTICS) ===\n\n")
+
+cat("TRAINING SET MEAN PREDICTIONS:\n")
+cat("  Logistic:", round(mean(train_pred_logistic), 4), "\n")
+cat("  Random Forest:", round(mean(train_pred_rf), 4), "\n")
+cat("  XGBoost:", round(mean(train_pred_xgb), 4), "\n\n")
+
+cat("TEST SET MEAN PREDICTIONS:\n")
+cat("  Logistic:", round(mean(test_pred_logistic), 4), "\n")
+cat("  Random Forest:", round(mean(test_pred_rf), 4), "\n")
+cat("  XGBoost:", round(mean(test_pred_xgb), 4), "\n\n")
+
+print(xgb_model)
+```
+
+```{r evaluation-metrics}
+# PHASE 2 - STEP 4: Comprehensive Model Evaluation
+
+cat("=== PHASE 2 - STEP 4: MODEL EVALUATION ===\n")
+
+if (!requireNamespace("pROC", quietly = TRUE)) {
+  install.packages("pROC")
+}
+library(pROC)
+
+cat("Defining evaluation metrics: log-loss, Brier score, ROC-AUC.\n\n")
+
+log_loss <- function(actual, predicted) {
+  eps <- 1e-15
+  predicted <- pmax(pmin(predicted, 1 - eps), eps)
+  -mean(actual * log(predicted) + (1 - actual) * log(1 - predicted))
+}
+
+brier_score <- function(actual, predicted) {
+  mean((predicted - actual)^2)
+}
+
+roc_auc <- function(actual, predicted) {
+  roc_obj <- roc(actual, predicted, quiet = TRUE)
+  as.numeric(auc(roc_obj))
+}
+
+cat("=== TRAINING SET METRICS ===\n")
+train_metrics <- data.frame(
+  Model      = c("Logistic Regression", "Random Forest", "XGBoost"),
+  LogLoss    = c(
+    log_loss(train_clean$won, train_pred_logistic),
+    log_loss(train_clean$won, train_pred_rf),
+    log_loss(train_clean$won, train_pred_xgb)
+  ),
+  BrierScore = c(
+    brier_score(train_clean$won, train_pred_logistic),
+    brier_score(train_clean$won, train_pred_rf),
+    brier_score(train_clean$won, train_pred_xgb)
+  ),
+  ROC_AUC    = c(
+    roc_auc(train_clean$won, train_pred_logistic),
+    roc_auc(train_clean$won, train_pred_rf),
+    roc_auc(train_clean$won, train_pred_xgb)
+  )
+)
+print(train_metrics)
+cat("\n")
+
+cat("=== TEST SET METRICS (2025) ===\n")
+test_metrics <- data.frame(
+  Model      = c("Logistic Regression", "Random Forest", "XGBoost"),
+  LogLoss    = c(
+    log_loss(test_clean$won, test_pred_logistic),
+    log_loss(test_clean$won, test_pred_rf),
+    log_loss(test_clean$won, test_pred_xgb)
+  ),
+  BrierScore = c(
+    brier_score(test_clean$won, test_pred_logistic),
+    brier_score(test_clean$won, test_pred_rf),
+    brier_score(test_clean$won, test_pred_xgb)
+  ),
+  ROC_AUC    = c(
+    roc_auc(test_clean$won, test_pred_logistic),
+    roc_auc(test_clean$won, test_pred_rf),
+    roc_auc(test_clean$won, test_pred_xgb)
+  ),
+  Calibration_Error = c(
+    abs(mean(test_clean$won) - mean(test_pred_logistic)),
+    abs(mean(test_clean$won) - mean(test_pred_rf)),
+    abs(mean(test_clean$won) - mean(test_pred_xgb))
+  )
+)
+print(test_metrics)
+cat("\n")
+
+cat("=== BEST MODEL PER METRIC (TEST SET) ===\n\n")
+
+best_logloss <- test_metrics[which.min(test_metrics$LogLoss), ]
+cat("Log-loss (lower is better):",
+    best_logloss$Model, "with", round(best_logloss$LogLoss, 4), "\n\n")
+
+best_brier <- test_metrics[which.min(test_metrics$BrierScore), ]
+cat("Brier score (lower is better):",
+    best_brier$Model, "with", round(best_brier$BrierScore, 4), "\n\n")
+
+best_auc <- test_metrics[which.max(test_metrics$ROC_AUC), ]
+cat("ROC-AUC (higher is better):",
+    best_auc$Model, "with", round(best_auc$ROC_AUC, 4), "\n\n")
+
+best_calib <- test_metrics[which.min(test_metrics$Calibration_Error), ]
+cat("Calibration error (lower is better):",
+    best_calib$Model, "with",
+    round(best_calib$Calibration_Error, 4), "absolute error\n\n")
+
+cat("=== OVERALL MODEL RANKING (COUNTING METRIC WINS) ===\n")
+scores <- c(
+  Logistic = sum(c(
+    test_metrics$LogLoss[1]        == min(test_metrics$LogLoss),
+    test_metrics$BrierScore[1]     == min(test_metrics$BrierScore),
+    test_metrics$ROC_AUC[1]        == max(test_metrics$ROC_AUC),
+    test_metrics$Calibration_Error[1] == min(test_metrics$Calibration_Error)
+  )),
+  RandomForest = sum(c(
+    test_metrics$LogLoss[2]        == min(test_metrics$LogLoss),
+    test_metrics$BrierScore[2]     == min(test_metrics$BrierScore),
+    test_metrics$ROC_AUC[2]        == max(test_metrics$ROC_AUC),
+    test_metrics$Calibration_Error[2] == min(test_metrics$Calibration_Error)
+  )),
+  XGBoost = sum(c(
+    test_metrics$LogLoss[3]        == min(test_metrics$LogLoss),
+    test_metrics$BrierScore[3]     == min(test_metrics$BrierScore),
+    test_metrics$ROC_AUC[3]        == max(test_metrics$ROC_AUC),
+    test_metrics$Calibration_Error[3] == min(test_metrics$Calibration_Error)
+  ))
+)
+
+ranking <- data.frame(
+  Model = names(scores),
+  Wins  = as.numeric(scores),
+  Rank  = rank(-scores)
+)
+ranking <- ranking[order(-ranking$Wins), ]
+rownames(ranking) <- NULL
+print(ranking)
+cat("\n")
+
+winner <- ranking$Model[1]
+cat("Recommended model based on these metrics:", winner, "\n\n")
+
+cat("Training samples:", nrow(train_clean), "balls\n")
+cat("Test samples:",     nrow(test_clean),  "balls\n")
+cat("Features: runs_required, balls_remaining, wickets_in_hand,\n")
+cat("          current_run_rate, required_run_rate, powerplay, death_overs\n\n")
+
+cat("Use cases:\n")
+cat("  - Real-time win probability during IPL matches\n")
+cat("  - Strategy support for teams\n")
+cat("  - Broadcast graphics and fan engagement\n\n")
+
+cat("=== ROC CURVES (TEST SET) ===\n")
+
+roc_logistic <- roc(test_clean$won, test_pred_logistic, quiet = TRUE)
+roc_rf       <- roc(test_clean$won, test_pred_rf,       quiet = TRUE)
+roc_xgb      <- roc(test_clean$won, test_pred_xgb,      quiet = TRUE)
+
+par(mfrow = c(1, 1))
+plot(roc_logistic, col = "blue", main = "ROC Curves - Test Set (2025)", lwd = 2)
+lines(roc_rf,      col = "green", lwd = 2)
+lines(roc_xgb,     col = "red",   lwd = 2)
+legend(
+  "bottomright",
+  legend = c(
+    paste("Logistic (AUC =", round(auc(roc_logistic), 3), ")"),
+    paste("Random Forest (AUC =", round(auc(roc_rf), 3), ")"),
+    paste("XGBoost (AUC =", round(auc(roc_xgb), 3), ")")
+  ),
+  col = c("blue", "green", "red"),
+  lwd = 2
+)
+
+cat("ROC curves generated.\n\n")
+
+cat("=== CALIBRATION PLOT (TEST SET) ===\n")
+
+create_calibration_data <- function(actual, predicted, n_bins = 10) {
+  breaks <- quantile(predicted, probs = seq(0, 1, length.out = n_bins + 1))
+  breaks[1] <- breaks[1] - 0.001
+  breaks[length(breaks)] <- breaks[length(breaks)] + 0.001
+  bins <- cut(predicted, breaks = breaks, include.lowest = TRUE)
+
+  data.frame(
+    predicted_prob = tapply(predicted, bins, mean),
+    actual_prob    = tapply(actual,    bins, mean),
+    count          = tapply(actual,    bins, length)
+  )
+}
+
+calib_logistic <- create_calibration_data(test_clean$won, test_pred_logistic)
+calib_rf       <- create_calibration_data(test_clean$won, test_pred_rf)
+calib_xgb      <- create_calibration_data(test_clean$won, test_pred_xgb)
+
+plot(
+  calib_logistic$predicted_prob, calib_logistic$actual_prob,
+  type = "b", col = "blue", pch = 19, lwd = 2,
+  xlim = c(0, 1), ylim = c(0, 1),
+  xlab = "Predicted Probability", ylab = "Actual Probability",
+  main = "Calibration Plot - Test Set (2025)"
+)
+lines(calib_rf$predicted_prob,  calib_rf$actual_prob,
+      type = "b", col = "green", pch = 19, lwd = 2)
+lines(calib_xgb$predicted_prob, calib_xgb$actual_prob,
+      type = "b", col = "red",   pch = 19, lwd = 2)
+abline(0, 1, lty = 2, col = "gray", lwd = 2)
+legend(
+  "topleft",
+  legend = c("Logistic", "Random Forest", "XGBoost", "Perfect"),
+  col    = c("blue", "green", "red", "gray"),
+  lty    = c(1, 1, 1, 2), lwd = 2,
+  pch    = c(19, 19, 19, NA),
+  bty    = "n"
+)
+
+cat("Calibration plot created.\n\n")
+```
+
+```{r playoff-analysis}
+# STEP 5: Analysis of key IPL 2025 matches
+
+cat("=== STEP 5: KEY MATCH ANALYSIS (IPL 2025) ===\n\n")
+
+cat("Identifying 2025 matches in the test set.\n\n")
+
+test_matches <- test_clean %>%
+  group_by(match_id) %>%
+  summarise(
+    batting_team = first(batting_team),
+    bowling_team = first(bowling_team),
+    target       = first(target),
+    final_score  = max(runs_scored_yet),
+    won          = first(won),
+    total_balls  = n(),
+    .groups      = "drop"
+  ) %>%
+  arrange(match_id)
+
+cat("Total 2025 matches in test set:", nrow(test_matches), "\n")
+cat("First few matches:\n")
+print(head(test_matches, 10))
+cat("\n")
+
+cat("Selecting the last four matches (likely to be playoff stage).\n")
+playoff_match_ids <- tail(test_matches$match_id, 4)
+cat("Selected match IDs:", paste(playoff_match_ids, collapse = ", "), "\n\n")
+
+plot_match_win_prob <- function(match_id, model_name = "XGBoost") {
+  match_data <- test_clean %>%
+    filter(match_id == !!match_id) %>%
+    arrange(over, ball) %>%
+    mutate(
+      ball_number  = row_number(),
+      balls_bowled = 120 - balls_remaining
+    )
+
+  batting_team <- first(match_data$batting_team)
+  bowling_team <- first(match_data$bowling_team)
+  target       <- first(match_data$target)
+  final_score  <- max(match_data$runs_scored_yet)
+  won          <- first(match_data$won)
+  outcome      <- ifelse(won == 1,
+                         paste(batting_team, "won"),
+                         paste(bowling_team, "won"))
+
+  if (model_name == "XGBoost") {
+    win_prob <- match_data$pred_xgb
+  } else if (model_name == "Logistic") {
+    win_prob <- match_data$pred_logistic
+  } else {
+    win_prob <- match_data$pred_rf
+  }
+
+  wicket_balls <- match_data %>%
+    filter(wicket == 1) %>%
+    pull(ball_number)
+
+  big_overs <- match_data %>%
+    group_by(over) %>%
+    summarise(
+      runs_in_over = sum(total_runs),
+      ball_number  = last(ball_number),
+      .groups      = "drop"
+    ) %>%
+    filter(runs_in_over >= 15)
+
+  par(mar = c(5, 4, 4, 8))
+
+  plot(
+    match_data$ball_number, win_prob * 100,
+    type = "l", lwd = 3, col = "red",
+    xlab = "Ball number", ylab = "Win probability (%)",
+    main = paste0(
+      batting_team, " vs ", bowling_team, " (", outcome, ")\n",
+      "Target: ", target, " | Scored: ", final_score
+    ),
+    ylim = c(0, 100),
+    las  = 1
+  )
+
+  abline(h = 50, lty = 2, col = "gray", lwd = 2)
+
+  if (length(wicket_balls) > 0) {
+    points(
+      wicket_balls, win_prob[wicket_balls] * 100,
+      pch = "W", col = "darkred", cex = 1.2, font = 2
+    )
+  }
+
+  if (nrow(big_overs) > 0) {
+    points(
+      big_overs$ball_number,
+      win_prob[big_overs$ball_number] * 100,
+      pch = 19, col = "darkgreen", cex = 1.5
+    )
+  }
+
+  grid(col = "lightgray", lty = "dotted")
+
+  final_prob <- tail(win_prob, 1) * 100
+  prediction_correct <- (won == 1 & final_prob > 50) ||
+                        (won == 0 & final_prob < 50)
+
+  outcome_label <- if (prediction_correct) "Predicted correctly"
+                   else "Predicted incorrectly"
+
+  legend(
+    "right", inset = c(-0.3, 0), xpd = TRUE,
+    legend = c(
+      paste0("Model: ", model_name),
+      paste0("Final probability: ", round(final_prob, 1), "%"),
+      outcome_label,
+      "W = wicket ball",
+      "● = 15+ run over"
+    ),
+    col  = c("red", "black", "black", "darkred", "darkgreen"),
+    lty  = c(1, NA, NA, NA, NA),
+    pch  = c(NA, NA, NA, NA, 19),
+    lwd  = c(3, NA, NA, NA, NA),
+    bty  = "n"
+  )
+
+  abline(v = 36,  lty = 3, col = "blue",   lwd = 1)  # end of powerplay
+  abline(v = 96,  lty = 3, col = "orange", lwd = 1)  # start of death overs
+  text(18,  95, "Powerplay", col = "blue",   cex = 0.8)
+  text(108, 95, "Death overs", col = "orange", cex = 0.8)
+
+  cat("\nMatch summary:\n")
+  cat("  ", batting_team, "vs", bowling_team, "\n")
+  cat("  Target:", target, "| Scored:", final_score, "\n")
+  cat("  Outcome:", outcome, "\n")
+  cat("  Initial probability:", round(win_prob[1] * 100, 1), "%\n")
+  cat("  Final probability:",   round(final_prob, 1), "%\n")
+  cat("  Wickets in innings:",  length(wicket_balls), "\n")
+  cat("  Overs with 15+ runs:", nrow(big_overs), "\n")
+  cat("  Model classification:", outcome_label, "\n\n")
+}
+
+cat("Plotting win probability for four selected matches.\n\n")
+par(mfrow = c(2, 2))
+for (i in seq_along(playoff_match_ids)) {
+  cat("Match", i, " - ID:", playoff_match_ids[i], "\n")
+  plot_match_win_prob(playoff_match_ids[i], model_name = "XGBoost")
+}
+par(mfrow = c(1, 1))
+
+cat("Detailed analysis for final match (assumed last in the list).\n\n")
+final_match_id <- playoff_match_ids[4]
+plot_match_win_prob(final_match_id, model_name = "XGBoost")
+
+plot_match_comparison <- function(match_id) {
+  match_data <- test_clean %>%
+    filter(match_id == !!match_id) %>%
+    arrange(over, ball) %>%
+    mutate(ball_number = row_number())
+
+  batting_team <- first(match_data$batting_team)
+  bowling_team <- first(match_data$bowling_team)
+  target       <- first(match_data$target)
+  final_score  <- max(match_data$runs_scored_yet)
+  won          <- first(match_data$won)
+  outcome      <- ifelse(won == 1,
+                         paste(batting_team, "won"),
+                         paste(bowling_team, "won"))
+
+  plot(
+    match_data$ball_number, match_data$pred_xgb * 100,
+    type = "l", lwd = 3, col = "red",
+    xlab = "Ball number", ylab = "Win probability (%)",
+    main = paste0(
+      "Model comparison - ", outcome, "\n",
+      batting_team, " vs ", bowling_team
+    ),
+    ylim = c(0, 100),
+    las  = 1
+  )
+
+  lines(match_data$ball_number, match_data$pred_logistic * 100,
+        lwd = 3, col = "blue")
+  lines(match_data$ball_number, match_data$pred_rf * 100,
+        lwd = 3, col = "green")
+
+  abline(h = 50, lty = 2, col = "gray", lwd = 2)
+  grid(col = "lightgray", lty = "dotted")
+
+  legend(
+    "topright",
+    legend = c("XGBoost", "Logistic", "Random Forest", "50%"),
+    col    = c("red", "blue", "green", "gray"),
+    lty    = c(1, 1, 1, 2),
+    lwd    = c(3, 3, 3, 2),
+    bty    = "n"
+  )
+
+  cat("Final win probability for", outcome, ":\n")
+  cat("  XGBoost:      ",
+      round(tail(match_data$pred_xgb,      1) * 100, 1), "%\n")
+  cat("  Logistic:     ",
+      round(tail(match_data$pred_logistic, 1) * 100, 1), "%\n")
+  cat("  Random Forest:",
+      round(tail(match_data$pred_rf,       1) * 100, 1), "%\n\n")
+}
+
+plot_match_comparison(final_match_id)
+
+cat("=== SUMMARY STATISTICS FOR PLAYOFF MATCHES ===\n\n")
+
+playoff_performance <- test_clean %>%
+  filter(match_id %in% playoff_match_ids) %>%
+  group_by(match_id) %>%
+  summarise(
+    batting_team        = first(batting_team),
+    target              = first(target),
+    final_score         = max(runs_scored_yet),
+    actual_outcome      = first(won),
+    xgb_final_prob      = last(pred_xgb),
+    logistic_final_prob = last(pred_logistic),
+    rf_final_prob       = last(pred_rf),
+    xgb_correct = (actual_outcome == 1 & xgb_final_prob > 0.5) |
+                  (actual_outcome == 0 & xgb_final_prob < 0.5),
+    logistic_correct = (actual_outcome == 1 & logistic_final_prob > 0.5) |
+                       (actual_outcome == 0 & logistic_final_prob < 0.5),
+    rf_correct = (actual_outcome == 1 & rf_final_prob > 0.5) |
+                 (actual_outcome == 0 & rf_final_prob < 0.5),
+    .groups = "drop"
+  )
+
+print(playoff_performance)
+
+cat("\nModel classification accuracy on selected matches:\n")
+cat(
+  "  XGBoost:", sum(playoff_performance$xgb_correct), "/",
+  nrow(playoff_performance), "correct\n"
+)
+cat(
+  "  Logistic:", sum(playoff_performance$logistic_correct), "/",
+  nrow(playoff_performance), "correct\n"
+)
+cat(
+  "  Random Forest:", sum(playoff_performance$rf_correct), "/",
+  nrow(playoff_performance), "correct\n\n"
+)
+
+cat("Key match analysis complete.\n")
+```
+
