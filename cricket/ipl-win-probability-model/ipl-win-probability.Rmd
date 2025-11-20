@@ -89,8 +89,6 @@ cat(
 write_xlsx(clean_ipl, "clean_ipl_data.xlsx")
 
 ```
-
-```r
 ```{r second-innings-and-outcomes}
 # Filter to 2nd innings (chases)
 second_innings <- clean_ipl %>%
