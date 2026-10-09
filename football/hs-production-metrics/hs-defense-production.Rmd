@@ -1,0 +1,169 @@
+---
+title: "High School Defensive Production Over Expected"
+output: html_document
+---
+
+Finds high school defenders who produce more than expected for their season, region, and division. Player-level data contains minors' names and stays out of version control (`data/` and `outputs/` are git-ignored).
+
+```{r setup, message = FALSE}
+library(readxl)
+library(dplyr)
+library(janitor)
+
+data_path       <- "data/football_defensive_ALL.xlsx"
+min_games       <- 6
+exclude_seasons <- c("2025")   # partial season at time of scrape
+scale_cap       <- 0.995       # cap used only when estimating each stat's spread
+top_n           <- 20
+```
+
+## Load and clean
+
+```{r load}
+stat_cols <- c("t_tck", "tfl", "sck", "p_def", "int", "ff")
+
+raw <- read_excel(data_path, sheet = 1, col_types = "text") %>% clean_names()
+
+missing <- setdiff(c("season", "region", "division", "team", "name", "g", stat_cols), names(raw))
+if (length(missing) > 0) stop("Missing columns: ", paste(missing, collapse = ", "))
+
+df <- raw %>%
+  mutate(
+    across(c(season, region, division, team), trimws),
+    name = gsub("\\s+", " ", trimws(name)),
+    across(c(g, all_of(stat_cols)), ~ suppressWarnings(as.numeric(.x)))
+  ) %>%
+  distinct() %>%
+  filter(
+    !is.na(name), name != "",
+    !season %in% exclude_seasons,
+    g >= min_games,
+    if_all(all_of(stat_cols), ~ is.finite(.x))
+  ) %>%
+  filter(rowSums(across(all_of(stat_cols))) > 0)
+
+tibble(
+  step = c("raw rows", "after cleaning"),
+  rows = c(nrow(raw), nrow(df))
+)
+```
+
+## Defensive Production Index (DPI)
+
+Each per-game stat is standardized against the population. The mean and spread are estimated on capped values so a few extreme rows do not distort the scale, but every player is scored on their real, uncapped rate, so the top of the list keeps its order instead of collapsing into ties.
+
+The index weights three roles equally so that coverage players are not penalized: tackling, disruption (TFL, sacks, forced fumbles), and coverage (interceptions, passes defended).
+
+```{r dpi}
+robust_z <- function(x, cap = scale_cap) {
+  capped <- pmin(x, quantile(x, cap, na.rm = TRUE))
+  (x - mean(capped)) / sd(capped)
+}
+
+df <- df %>%
+  mutate(
+    across(all_of(stat_cols), ~ .x / g, .names = "{.col}_pg"),
+    across(ends_with("_pg"), robust_z, .names = "{.col}_z"),
+    tackle_idx   = t_tck_pg_z,
+    disrupt_idx  = (tfl_pg_z + sck_pg_z + ff_pg_z) / 3,
+    coverage_idx = (p_def_pg_z + int_pg_z) / 2,
+    dpi          = (tackle_idx + disrupt_idx + coverage_idx) / 3
+  )
+```
+
+A PCA on the same per-game stats shows why its first component was not used as the index: interceptions and passes defended load negatively, so it would score ballhawks below average.
+
+```{r pca}
+pca_fit <- prcomp(select(df, ends_with("_pg")), center = TRUE, scale. = TRUE)
+round(pca_fit$rotation[, 1:2], 3)
+summary(pca_fit)$importance[2, 1:3]
+```
+
+## Adjust for competition level
+
+Expected DPI comes from season, region, and division, weighted by games played. The residual is production over expected. Team is deliberately left out: a team effect would turn the score into "better than his own teammates" and would push down stars on deep teams. A separate within-team score is reported for that question.
+
+```{r adjust}
+fit <- lm(dpi ~ season + region + division, data = df, weights = g)
+
+df <- df %>%
+  mutate(
+    dpi_expected = as.numeric(fitted(fit)),
+    poe          = as.numeric(resid(fit)),
+    poe_z        = as.numeric(scale(poe)),
+    poe_pct      = percent_rank(poe)
+  ) %>%
+  group_by(season, team) %>%
+  mutate(within_team_z = if (n() >= 3) as.numeric(scale(dpi)) else NA_real_) %>%
+  ungroup()
+
+c(r_squared = summary(fit)$r.squared, aliased_terms = sum(is.na(coef(fit))))
+```
+
+Report percentiles rather than reading z-scores as normal: the residuals are right-skewed.
+
+```{r thresholds}
+tibble(
+  percentile = c(0.90, 0.95, 0.99),
+  poe_z_at   = round(quantile(df$poe_z, c(0.90, 0.95, 0.99)), 2)
+)
+```
+
+## Leaderboards
+
+```{r leaderboards}
+id_cols <- c("season", "region", "division", "team", "name", "g")
+
+overall <- df %>%
+  arrange(desc(poe), desc(g)) %>%
+  select(all_of(id_cols), ends_with("_pg"), dpi, dpi_expected, poe_z, poe_pct, within_team_z)
+
+tacklers <- df %>%
+  arrange(desc(t_tck_pg), desc(t_tck)) %>%
+  select(all_of(id_cols), t_tck, t_tck_pg, tackle_idx, poe_pct)
+
+disruptors <- df %>%
+  mutate(disrupt_pg = tfl_pg + sck_pg + ff_pg) %>%
+  arrange(desc(disrupt_idx), desc(tfl + sck + ff)) %>%
+  select(all_of(id_cols), tfl_pg, sck_pg, ff_pg, disrupt_pg, disrupt_idx, poe_pct)
+
+ballhawks <- df %>%
+  mutate(ballhawk_pg = int_pg + p_def_pg) %>%
+  arrange(desc(coverage_idx), desc(int + p_def)) %>%
+  select(all_of(id_cols), int_pg, p_def_pg, ballhawk_pg, coverage_idx, poe_pct)
+
+head(overall, top_n)
+```
+
+The overall list is player-seasons, so a multi-year starter can fill several slots. For a "top players" list, keep each player's best season (players are identified by name and team).
+
+```{r top-players}
+top_players <- overall %>%
+  group_by(name, team) %>%
+  slice_max(poe_z, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  arrange(desc(poe_z)) %>%
+  head(top_n)
+
+top_players
+```
+
+## Save
+
+```{r save}
+dir.create("outputs", showWarnings = FALSE)
+write.csv(overall,                 "outputs/defense_overall.csv",             row.names = FALSE)
+write.csv(top_players,             "outputs/defense_top_players.csv",         row.names = FALSE)
+write.csv(tacklers,                "outputs/defense_tacklers.csv",            row.names = FALSE)
+write.csv(disruptors,              "outputs/defense_disruptors.csv",          row.names = FALSE)
+write.csv(ballhawks,               "outputs/defense_ballhawks.csv",           row.names = FALSE)
+write.csv(as.data.frame(pca_fit$rotation), "outputs/defense_pca_loadings.csv")
+```
+
+## Limitations
+
+- Season, region, and division explain very little of the index (see the R-squared above), so "over expected" is close to raw production. A stronger adjustment would need opponent or team-strength data.
+- "Production over expected" is not the same as undervalued. Measuring undervaluation needs a value signal such as recruiting rating, offers, or all-conference honors to compare against.
+- The data has no position column, so linemen and defensive backs share one scale. The three-role index reduces this but does not remove it.
+- In some rows sacks exceed tackles for loss, so the source does not always count sacks inside TFL. The disruption index may double-count sacks for some players.
+- Per-game rates from 6–7 games are noisier than full-season rates.

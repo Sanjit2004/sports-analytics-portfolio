@@ -1,0 +1,10 @@
+.DS_Store
+.Rhistory
+.Rproj.user/
+*.zip
+
+# Player-level high school data (minors' names) stays local
+football/**/data/
+football/**/outputs/
+football/**/*.nb.html
+football/**/*.html

@@ -1,12 +1,12 @@
 # Sports Analytics Portfolio
 
-Statistical models for cricket built in R on real IPL ball-by-ball data, each with a published HTML report.
+Statistical models in R for IPL cricket and Wisconsin high school football.
 
 | Project | Question | Methods | Report |
 |---|---|---|---|
 | [IPL Win Probability](cricket/ipl-win-probability-model/) | How likely is the chasing team to win, ball by ball? | Logistic regression, random forest, XGBoost; out-of-season test | [View report](https://sanjit2004.github.io/sports-analytics-portfolio/ipl-win-probability.html) |
 | [IPL Tournament Simulation](cricket/ipl-bradley-terry-tournament-simulation/) | How often do Mumbai Indians and Chennai Super Kings meet in the final? | Bradley–Terry model, 20,000-season Monte Carlo simulation | [View report](https://sanjit2004.github.io/sports-analytics-portfolio/ipl-bradley-terry-tournament-simulation.html) |
-| [High School Football Metrics](football/hs-production-metrics/) | Which players produce the most per opportunity? | Web scraping, data cleaning, rate metrics | In progress |
+| [High School Defensive Production](football/hs-production-metrics/) | Which defenders produce more than expected for their level? | Role-weighted production index, regression adjustment | Code only (player data kept private) |
 
 ## Highlights
 
