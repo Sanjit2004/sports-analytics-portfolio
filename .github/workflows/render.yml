@@ -1,0 +1,30 @@
+name: Render reports
+
+on:
+  pull_request:
+    paths: ["cricket/**", "DESCRIPTION", "Makefile", ".github/workflows/render.yml"]
+  workflow_dispatch:
+
+jobs:
+  cricket:
+    name: Knit IPL reports from fresh data
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+
+      - name: Render
+        run: make cricket
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipl-reports
+          path: docs/*.html
