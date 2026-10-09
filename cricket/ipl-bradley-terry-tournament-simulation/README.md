@@ -1,51 +1,22 @@
-# IPL 2019 Season Simulation - Bradley-Terry Model
+# IPL 2019 Tournament Simulation
 
-This project fits a Bradley–Terry paired comparison model to all matches of the 2019 IPL season and simulates 20,000 seasons to estimate postseason outcomes.
+Fits a Bradley–Terry model to the 2019 IPL season and replays the tournament 20,000 times to estimate playoff outcomes.
 
-## Objective
+**[View the full report](https://sanjit2004.github.io/sports-analytics-portfolio/ipl-bradley-terry-tournament-simulation.html)**
 
-- Estimate team strength parameters (λ)
-- Incorporate batting-order effects
-- Simulate full seasons under true IPL schedule
-- Compute probability distribution of finalist pairs
-- Quantify tournament volatility
+## Approach
 
-## Key Assets
+- **Data:** 2019 IPL match results built from Cricsheet ball-by-ball data via `cricketdata`.
+- **Model:** a Bradley–Terry paired-comparison model (`BradleyTerry2::BTm`) that estimates one strength per team plus a batting-first effect.
+- **Simulation:** replays the real 2019 league schedule, awards 2 points per win, seeds the top four, then plays the IPL bracket (Qualifier 1, Eliminator, Qualifier 2, Final). Repeated 20,000 times with a fixed seed.
 
-- **PDF report:** `reports/Bradley-Terry-Lens.pdf` :contentReference[oaicite:2]{index=2}  
-- **HTML knitted report:** `reports/Report.html` :contentReference[oaicite:3]{index=3}
+## Result
 
-## Methods Summary
+Mumbai Indians and Chennai Super Kings met in the final in **33.5%** of simulated seasons (they met in the real 2019 final). The report also shows how often every other pair of teams reached the final.
 
-- Fit Bradley–Terry ability parameters  
-- Use batting-first penalty (γ ≈ -0.48 from model)  
-- Simulate full 2019 schedule 20,000×  
-- Use playoff structure: Qualifier 1 → Eliminator → Qualifier 2 → Final  
-- Track frequency of finalist pairings
+## Run it
 
-## Key Results
-
-From the PDF (page 7):  
-- MI vs CSK reached the final **33.5% of the time**  
-- Other strong pairings included MI–DC, CSK–SRH, demonstrating volatility
-
-From the PDF (page 5):  
-- Team ability rankings matched real standings, validating the model
-
-## Files
-
-- `notebooks/`: model fitting + simulation code  
-- `reports/`: final PDF and HTML deliverables  
-- `data/`: raw and cleaned IPL match data
-
-## How to Run
-
-1. Install R packages: `BradleyTerry2`, `tidyverse`, `ggplot2`, `dplyr`  
-2. Open and run the main notebook or Rmd  
-3. Knit to generate reports
-
-## Outputs
-
-- Team strength plot  
-- Finalist pairing distribution  
-- Tournament volatility commentary
+```r
+install.packages(c("cricketdata", "dplyr", "tidyr", "purrr", "BradleyTerry2", "rmarkdown"))
+rmarkdown::render("ipl-bradley-terry-tournament-simulation.Rmd")
+```

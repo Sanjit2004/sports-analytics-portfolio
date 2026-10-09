@@ -1,40 +1,17 @@
 # High School Football Production Metrics
 
-This project scrapes high school football statistics, cleans and unifies the data, and creates production-based metrics for player evaluation.  
-**Status:** Work in progress — the scraping pipeline is complete and I am currently working on cleaning and feature engineering.
+> [!NOTE]
+> Work in progress. The code is not published in this repository yet.
 
-## Objective
+Builds per-opportunity production metrics for high school football players from public stat tables.
 
-- Scrape WisSports/MaxPreps-style statistical tables  
-- Clean messy, inconsistent high school data  
-- Generate production metrics (yards per game, efficiency, usage)  
-- Build leaderboards and visualizations
+## Plan
 
-## Pipeline
+1. **Scrape** season stat tables from public player pages (respecting `robots.txt`).
+2. **Clean** columns across seasons and positions (QB, RB, WR) and handle missing values.
+3. **Measure** rate and efficiency stats such as yards per game and yards per touch.
+4. **Analyze** leaderboards and efficiency-versus-usage plots.
 
-### 1. Scraping  
-Python scripts to extract tables from player pages across seasons.  
-**Current stage:** Scraping is implemented and raw datasets have been collected.
+## Stack
 
-### 2. Cleaning + Feature Engineering (in progress)  
-Standardizing columns across seasons and positions (QB, RB, WR), handling missing data, and creating rate/efficiency stats.
-
-### 3. Analysis (planned)  
-Ranking and visualizing performance metrics, building leaderboards, and exploring efficiency vs usage.
-
-## Files
-
-- `scraping/`: scraping scripts  
-- `notebooks/`: cleaning + feature engineering + plots (to be expanded)  
-- `data/`: cleaned player-level data (in progress)
-
-## Outputs (planned)
-
-- Player production tables  
-- Rank-based summaries  
-- Efficiency vs usage plots
-
-## How to Run
-
-1. Install Python packages: `requests`, `beautifulsoup4`, `pandas`, `numpy`  
-2. Run scraper (respect `robots.txt`) to regenerate the raw data
+Python (requests, BeautifulSoup, pandas, NumPy).

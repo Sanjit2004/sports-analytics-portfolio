@@ -1,58 +1,30 @@
-# Sports Analytics Portfolio — Sanjit Saji
+# Sports Analytics Portfolio
 
-This portfolio showcases my data science work in **cricket analytics** and **American football analytics**.  
-All projects include real datasets, reproducible code, and professional reports.
+Statistical models for cricket built in R on real IPL ball-by-ball data, each with a published HTML report.
 
-##  Featured Projects
+| Project | Question | Methods | Report |
+|---|---|---|---|
+| [IPL Win Probability](cricket/ipl-win-probability-model/) | How likely is the chasing team to win, ball by ball? | Logistic regression, random forest, XGBoost; out-of-season test | [View report](https://sanjit2004.github.io/sports-analytics-portfolio/ipl-win-probability.html) |
+| [IPL Tournament Simulation](cricket/ipl-bradley-terry-tournament-simulation/) | How often do Mumbai Indians and Chennai Super Kings meet in the final? | Bradley–Terry model, 20,000-season Monte Carlo simulation | [View report](https://sanjit2004.github.io/sports-analytics-portfolio/ipl-bradley-terry-tournament-simulation.html) |
+| [High School Football Metrics](football/hs-production-metrics/) | Which players produce the most per opportunity? | Web scraping, data cleaning, rate metrics | In progress |
 
-### 1. IPL Tournament Simulation with Bradley–Terry Modeling  
-**Folder:** `cricket/ipl-bradley-terry-tournament-simulation/`
-**Live HTML Report:** https://sanjit2004.github.io/sports-analytics-portfolio/ipl-bradley-terry-tournament-simulation.html
-This project fits a Bradley–Terry paired comparison model to the **2019 IPL season** and simulates **20,000 seasons** to estimate finalist probabilities.  
-The analysis quantifies tournament volatility and models the probability of MI and CSK reaching the final together.
+## Highlights
 
-Includes:  
-- Bradley–Terry estimation  
-- Home/away + batting-first effects  
-- Season-level simulation  
-- Probability of finalist pairs  
-- Professional PDF + HTML reports
+- **Win probability:** trained on 124,666 second-innings deliveries (2008–2024) and tested on 8,092 deliveries from 72 matches in the 2025 season. XGBoost gave the best test AUC and calibration.
+- **Tournament simulation:** fitted team strengths plus a batting-first effect on the 2019 season, then replayed the real schedule and playoff bracket 20,000 times. MI and CSK met in the final in about 33.5% of simulated seasons.
 
+## Run the analyses
 
-### 2. IPL Win Probability Model (Ball-by-Ball)  
-**Folder:** `cricket/ipl-win-probability-model/` 
-**Live HTML Report:** https://Sanjit2004.github.io/sports-analytics-portfolio/ipl-win-probability.html  
-A ball-by-ball win probability model that evaluates how match momentum shifts during an IPL game using logistic/state-based modeling.
+Both cricket projects are R Markdown notebooks. They download data at run time with the [`cricketdata`](https://github.com/robjhyndman/cricketdata) package, so no data files are needed.
 
-Includes:  
-- Feature engineering from ball-by-ball data  
-- Win probability calculation  
-- Match visualizations  
-- Turning-point detection
+```r
+install.packages(c("tidyverse", "cricketdata", "BradleyTerry2",
+                   "randomForest", "xgboost", "pROC", "writexl", "rmarkdown"))
+rmarkdown::render("cricket/ipl-win-probability-model/ipl-win-probability.Rmd")
+```
 
-### 3. High School Football Production Metrics  
-**Folder:** `football/hs-production-metrics/`  
-A full pipeline to scrape high school football stats, clean the data, and derive production metrics.
+The knitted reports in [`docs/`](docs/) are served with GitHub Pages.
 
-Includes:  
-- Web scraping (Python)  
-- Data cleaning & unification  
-- Rank-based performance metrics  
-- Exploratory plots and trends
+## Stack
 
-## Tech Stack
-
-**Languages:** Python, R 
-**Python:** pandas, numpy  
-**R:** tidyverse, ggplot2, BradleyTerry2, rmarkdown  
-**Tools:** RStudio, Git, GitHub
-
-
-## Portfolio Highlights
-
-This repo demonstrates:  
-- Statistical modeling (BT models, logistic regression, simulation)  
-- Data cleaning pipelines  
-- End-to-end analytics workflows  
-- Clear storytelling through visualizations  
-- Real-world sports intuition across cricket and football
+R (tidyverse, BradleyTerry2, randomForest, xgboost, pROC), R Markdown, GitHub Pages.

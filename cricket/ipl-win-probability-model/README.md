@@ -1,33 +1,27 @@
-# IPL Win Probability Model — Ball-by-Ball Analysis
+# IPL Win Probability Model
 
-This project computes win probability throughout an IPL match using ball-by-ball data and state variables like runs required, overs left, and wickets in hand.
+Estimates the chasing team's chance of winning after every ball of an IPL second innings.
 
-## Objective
+**[View the full report](https://sanjit2004.github.io/sports-analytics-portfolio/ipl-win-probability.html)**
 
-- Build logistic/state-based win probability model  
-- Track probability change every ball  
-- Identify momentum swings using model outputs
+## Approach
 
-## Methods
+- **Data:** every IPL ball-by-ball record from [Cricsheet](https://cricsheet.org/), loaded with `cricketdata::fetch_cricsheet()`. Only second innings are used, so the target score is known.
+- **Features:** runs required, balls remaining, wickets in hand, current and required run rate, powerplay and death-over flags.
+- **Models:** logistic regression (interpretable baseline), random forest, and XGBoost (tuned with cross-validation).
+- **Validation:** trained on 2008–2024 (124,666 deliveries) and tested on the unseen 2025 season (8,092 deliveries, 72 matches). Compared with log-loss, Brier score, and ROC-AUC.
 
-- Feature engineering: runs-left, balls-left, wickets, current RR  
-- Fit logistic/gradient boosting model  
-- Apply model ball-by-ball to a match  
-- Plot win probability progression and key events
+## Results
 
-## Files
+- XGBoost had the highest test AUC and the best calibration.
+- Runs required, required run rate, and wickets in hand were the strongest predictors.
+- The report includes ROC curves, calibration plots, and ball-by-ball win probability charts for key 2025 matches.
 
-- `notebooks/`: model training + match analysis  
-- `plots/`: win probability graphs  
-- `data/`: cleaned ball-by-ball data
+## Run it
 
-## Outputs
+```r
+install.packages(c("tidyverse", "cricketdata", "randomForest", "xgboost", "pROC", "writexl", "rmarkdown"))
+rmarkdown::render("ipl-win-probability.Rmd")
+```
 
-- Win probability timeline  
-- Turning point identification  
-- Manual commentary about momentum shifts
-
-## How to Run
-
-1. Install Python packages: pandas, numpy, matplotlib, sklearn  
-2. Run notebook in order: data prep → model → plotting
+The notebook writes `ipl_train_2008_2024.csv` and `ipl_test_2025.csv` to the working directory.
