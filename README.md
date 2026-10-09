@@ -10,7 +10,7 @@ Statistical models in R for IPL cricket and Wisconsin high school football.
 
 ## Highlights
 
-- **Win probability:** trained on 124,666 second-innings deliveries (2008–2024) and tested on 8,092 deliveries from 72 matches in the 2025 season. XGBoost had the best test AUC and the lowest calibration error (0.072, against 0.085 for logistic regression and 0.095 for random forest).
+- **Win probability:** trained on 124,666 second-innings deliveries (2008–2024) and tested on 8,092 deliveries from 72 matches in the 2025 season. XGBoost gave the most accurate probabilities, with the best log loss, Brier score, and calibration error (0.074, against 0.085 for logistic regression and 0.095 for random forest). Its AUC was effectively tied with logistic regression (0.886 vs 0.889).
 - **Tournament simulation:** fitted team strengths plus a batting-first effect on the 2019 season, then replayed the real schedule and playoff bracket 20,000 times. MI and CSK met in the final in about 33.5% of simulated seasons.
 
 ## Data
@@ -27,10 +27,12 @@ Requires R 4.3 or later and [pandoc](https://pandoc.org/). The package list is i
 
 ```bash
 make deps       # install the R packages
-make cricket    # re-download the data and render both IPL reports into docs/
+make cricket    # re-download the data and knit both IPL notebooks
 ```
 
-Random seeds are fixed and the seasons are pinned, so a re-run fits the same models on the same data. The [Render reports](.github/workflows/render.yml) workflow knits both cricket reports from freshly downloaded data on every pull request that touches them. The published reports in [`docs/`](docs/) are served with GitHub Pages and only change when they are rendered and committed deliberately.
+Random seeds are fixed and the seasons are pinned, so a re-run fits the same models on the same data. The [Render reports](.github/workflows/render.yml) workflow knits both cricket notebooks from freshly downloaded data on every pull request that touches them.
+
+The linked reports are written summaries. The [full win probability analysis](https://sanjit2004.github.io/sports-analytics-portfolio/ipl-win-probability-full.html) is the notebook rendered by `make winprob`, with every model output and metric. The numbers above come from that build.
 
 ## Stack
 

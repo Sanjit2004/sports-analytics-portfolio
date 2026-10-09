@@ -27,4 +27,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ipl-reports
-          path: docs/*.html
+          path: |
+            docs/ipl-win-probability-full.html
+            build/*.html

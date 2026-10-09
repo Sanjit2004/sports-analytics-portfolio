@@ -12,13 +12,13 @@ help: ## List targets
 deps: ## Install the R packages listed in DESCRIPTION
 	Rscript -e 'if (!requireNamespace("remotes", quietly = TRUE)) install.packages("remotes"); remotes::install_deps(".")'
 
-cricket: winprob tournament ## Render both IPL reports into docs/
+cricket: winprob tournament ## Render both IPL notebooks
 
-winprob: ## Render the win probability report into docs/
-	$(call RENDER,$(WINPROB),ipl-win-probability.html,$(CURDIR)/docs)
+winprob: ## Render the win probability notebook to docs/ipl-win-probability-full.html
+	$(call RENDER,$(WINPROB),ipl-win-probability-full.html,$(CURDIR)/docs)
 
-tournament: ## Render the tournament simulation report into docs/
-	$(call RENDER,$(TOURNAMENT),ipl-bradley-terry-tournament-simulation.html,$(CURDIR)/docs)
+tournament: ## Render the tournament notebook into build/ (the published page is a written summary)
+	$(call RENDER,$(TOURNAMENT),ipl-bradley-terry-tournament-simulation.html,$(CURDIR)/build)
 
 football: ## Render the football report locally (needs the private data file)
 	$(call RENDER,$(FOOTBALL),hs-defense-production.html,$(CURDIR)/football/hs-production-metrics)
