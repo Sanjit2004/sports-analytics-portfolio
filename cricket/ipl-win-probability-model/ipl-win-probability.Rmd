@@ -661,7 +661,12 @@ cv_results <- xgb.cv(
   print_every_n         = 50
 )
 
-optimal_rounds <- cv_results$best_iteration
+# xgboost >= 3.0 moved best_iteration under early_stop
+optimal_rounds <- if (!is.null(cv_results$best_iteration)) {
+  cv_results$best_iteration
+} else {
+  cv_results$early_stop$best_iteration
+}
 cat("Optimal rounds:", optimal_rounds, "\n")
 cat("Best CV log-loss:",
     round(cv_results$evaluation_log$test_logloss_mean[optimal_rounds], 4),
@@ -675,7 +680,6 @@ xgb_model <- xgb.train(
   params   = params,
   data     = dtrain,
   nrounds  = optimal_rounds,
-  watchlist = list(train = dtrain, test = dtest),
   verbose  = 0,
   print_every_n = 50
 )
