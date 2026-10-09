@@ -2,7 +2,7 @@
 
 Estimates the chasing team's chance of winning after every ball of an IPL second innings.
 
-**[View the full report](https://sanjit2004.github.io/sports-analytics-portfolio/ipl-win-probability.html)**
+**[Executive summary](https://sanjit2004.github.io/sports-analytics-portfolio/ipl-win-probability.html)** · **[Full analysis](https://sanjit2004.github.io/sports-analytics-portfolio/ipl-win-probability-full.html)** (every model output, rebuilt from fresh data)
 
 ## Approach
 
@@ -13,8 +13,17 @@ Estimates the chasing team's chance of winning after every ball of an IPL second
 
 ## Results
 
-- XGBoost had the highest test AUC and the best calibration.
-- Runs required, required run rate, and wickets in hand were the strongest predictors.
+Test season (2025), 8,092 deliveries, from the full analysis:
+
+| Model | Log loss | Brier score | Calibration error | ROC-AUC |
+|---|---|---|---|---|
+| Logistic regression | 0.444 | 0.147 | 0.085 | **0.889** |
+| Random forest | 0.583 | 0.164 | 0.095 | 0.874 |
+| XGBoost | **0.442** | **0.146** | **0.074** | 0.886 |
+
+- XGBoost gave the most accurate probabilities: best log loss, Brier score, and calibration error. The margin over logistic regression is small, and their AUCs are effectively tied, so the simpler model is a strong baseline.
+- Random forest was overconfident on the test season, which shows in its much higher log loss.
+- Required run rate, runs required, and wickets in hand were the strongest predictors.
 - The report includes ROC curves, calibration plots, and ball-by-ball win probability charts for key 2025 matches.
 
 ## Run it

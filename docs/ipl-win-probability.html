@@ -611,9 +611,10 @@ reference line (perfect calibration).</p>
 <p>The model validation shows that all three models predict match
 outcomes accurately, but with different strengths:</p>
 <ul>
-<li><p>XGBoost provided the best overall performance - highest AUC and
-most reliable calibration, meaning its predicted win probabilities
-closely matched actual results.</p></li>
+<li><p>XGBoost provided the best overall performance - the most reliable
+calibration, meaning its predicted win probabilities closely matched
+actual results. Its AUC was close to logistic regression's; the
+<a href="ipl-win-probability-full.html">full analysis</a> reports every metric.</p></li>
 <li><p>Random Forest captured momentum shifts well but slightly
 underestimated win chances in tight games.</p></li>
 <li><p>Logistic Regression was interpretable and stable but less

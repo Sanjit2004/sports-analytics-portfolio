@@ -1,0 +1,25 @@
+Type: Project
+Package: sportsanalyticsportfolio
+Title: IPL Cricket and High School Football Models in R
+Version: 1.0.0
+Authors@R: person("Sanjit", "Saji", email = "sanjitsaji2004@gmail.com", role = c("aut", "cre"))
+Description: R Markdown analyses: IPL ball-by-ball win probability, a
+    Bradley-Terry tournament simulation, and high school defensive
+    production over expected.
+License: MIT + file LICENSE
+Depends: R (>= 4.3)
+Imports:
+    BradleyTerry2,
+    cricketdata,
+    dplyr,
+    janitor,
+    knitr,
+    pROC,
+    purrr,
+    randomForest,
+    readxl,
+    rmarkdown,
+    tidyr,
+    tidyverse,
+    writexl,
+    xgboost

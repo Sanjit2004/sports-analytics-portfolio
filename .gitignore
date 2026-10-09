@@ -3,6 +3,12 @@
 .Rproj.user/
 *.zip
 
+# Intermediate files written by the win probability notebook
+*.csv
+*.xlsx
+*_files/
+build/
+
 # Player-level high school data (minors' names) stays local
 football/**/data/
 football/**/outputs/
